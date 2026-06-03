@@ -4,10 +4,10 @@
 #include "reducer.h"
 #include "utils.h"
 
-std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
+std::tuple<torch::Tensor, std::optional<torch::Tensor>>
 scatter_cpu(torch::Tensor src, torch::Tensor index, int64_t dim,
-            torch::optional<torch::Tensor> optional_out,
-            torch::optional<int64_t> dim_size, std::string reduce) {
+            std::optional<torch::Tensor> optional_out,
+            std::optional<int64_t> dim_size, std::string reduce) {
   CHECK_CPU(src);
   CHECK_CPU(index);
   if (optional_out.has_value())
@@ -36,7 +36,7 @@ scatter_cpu(torch::Tensor src, torch::Tensor index, int64_t dim,
     out = torch::empty(sizes, src.options());
   }
 
-  torch::optional<torch::Tensor> arg_out = torch::nullopt;
+  std::optional<torch::Tensor> arg_out = std::nullopt;
   int64_t *arg_out_data = nullptr;
   if (reduce2REDUCE.at(reduce) == MIN || reduce2REDUCE.at(reduce) == MAX) {
     arg_out = torch::full_like(out, src.size(dim), index.options());
@@ -57,7 +57,7 @@ scatter_cpu(torch::Tensor src, torch::Tensor index, int64_t dim,
   auto N = out.size(dim);
 
   auto index_info = getTensorInfo<int64_t>(index);
-  AT_DISPATCH_ALL_TYPES_AND(at::ScalarType::Half, src.scalar_type(), "_", [&] {
+  AT_DISPATCH_ALL_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, src.scalar_type(), "scatter_cpu", [&] {
     auto src_data = src.data_ptr<scalar_t>();
     auto out_data = out.data_ptr<scalar_t>();
 

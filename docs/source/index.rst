@@ -11,10 +11,13 @@ All included operations are broadcastable, work on varying data types, are imple
 
 .. toctree::
    :glob:
-   :maxdepth: 1
+   :maxdepth: 0
    :caption: Package reference
 
-   functions/*
+   functions/scatter
+   functions/segment_coo
+   functions/segment_csr
+   functions/composite
 
 Indices and tables
 ==================

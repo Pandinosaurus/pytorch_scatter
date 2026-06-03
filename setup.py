@@ -1,17 +1,22 @@
-import os
-import sys
 import glob
+import os
 import os.path as osp
-from itertools import product
-from setuptools import setup, find_packages
 import platform
+import sys
+from itertools import product
 
 import torch
+from setuptools import find_packages, setup
 from torch.__config__ import parallel_info
-from torch.utils.cpp_extension import BuildExtension
-from torch.utils.cpp_extension import CppExtension, CUDAExtension, CUDA_HOME
+from torch.utils.cpp_extension import (CUDA_HOME, BuildExtension, CppExtension,
+                                       CUDAExtension)
 
-WITH_CUDA = torch.cuda.is_available() and CUDA_HOME is not None
+__version__ = '2.1.2'
+URL = 'https://github.com/rusty1s/pytorch_scatter'
+
+WITH_CUDA = False
+if torch.cuda.is_available():
+    WITH_CUDA = CUDA_HOME is not None or torch.version.hip
 suffices = ['cpu', 'cuda'] if WITH_CUDA else ['cpu']
 if os.getenv('FORCE_CUDA', '0') == '1':
     suffices = ['cuda', 'cpu']
@@ -21,6 +26,7 @@ if os.getenv('FORCE_ONLY_CPU', '0') == '1':
     suffices = ['cpu']
 
 BUILD_DOCS = os.getenv('BUILD_DOCS', '0') == '1'
+WITH_SYMBOLS = os.getenv('WITH_SYMBOLS', '0') == '1'
 
 
 def get_extensions():
@@ -28,13 +34,20 @@ def get_extensions():
 
     extensions_dir = osp.join('csrc')
     main_files = glob.glob(osp.join(extensions_dir, '*.cpp'))
+    # remove generated 'hip' files, in case of rebuilds
+    main_files = [path for path in main_files if 'hip' not in path]
 
     for main, suffix in product(main_files, suffices):
-        define_macros = []
-        extra_compile_args = {'cxx': ['-O2']}
+        define_macros = [('WITH_PYTHON', None)]
+        undef_macros = []
+
+        if sys.platform == 'win32':
+            define_macros += [('torchscatter_EXPORTS', None)]
+
+        extra_compile_args = {'cxx': ['-O3']}
         if not os.name == 'nt':  # Not on Windows:
             extra_compile_args['cxx'] += ['-Wno-sign-compare']
-        extra_link_args = ['-s']
+        extra_link_args = [] if WITH_SYMBOLS else ['-s']
 
         info = parallel_info()
         if ('backend: OpenMP' in info and 'OpenMP not found' not in info
@@ -48,15 +61,27 @@ def get_extensions():
             print('Compiling without OpenMP...')
 
         # Compile for mac arm64
-        if (sys.platform == 'darwin' and platform.machine() == 'arm64'):
-            extra_compile_args['cxx'] += ['-arch', 'arm64']
-            extra_link_args += ['-arch', 'arm64']
+        if sys.platform == 'darwin':
+            extra_compile_args['cxx'] += ['-D_LIBCPP_DISABLE_AVAILABILITY']
+            if platform.machine == 'arm64':
+                extra_compile_args['cxx'] += ['-arch', 'arm64']
+                extra_link_args += ['-arch', 'arm64']
 
         if suffix == 'cuda':
             define_macros += [('WITH_CUDA', None)]
             nvcc_flags = os.getenv('NVCC_FLAGS', '')
             nvcc_flags = [] if nvcc_flags == '' else nvcc_flags.split(' ')
-            nvcc_flags += ['--expt-relaxed-constexpr', '-O2']
+            nvcc_flags += ['-O3']
+            nvcc_flags += ['-DTORCH_INDUCTOR_CPP_WRAPPER']
+            if sys.platform == 'win32':
+                nvcc_flags += ['-Xcompiler', '/permissive-']
+            if torch.version.hip:
+                # USE_ROCM was added to later versions of PyTorch.
+                # Define here to support older PyTorch versions as well:
+                define_macros += [('USE_ROCM', None)]
+                undef_macros += ['__HIP_NO_HALF_CONVERSIONS__']
+            else:
+                nvcc_flags += ['--expt-relaxed-constexpr']
             extra_compile_args['nvcc'] = nvcc_flags
 
         name = main.split(os.sep)[-1][:-4]
@@ -76,6 +101,7 @@ def get_extensions():
             sources,
             include_dirs=[extensions_dir],
             define_macros=define_macros,
+            undef_macros=undef_macros,
             extra_compile_args=extra_compile_args,
             extra_link_args=extra_link_args,
         )
@@ -85,27 +111,36 @@ def get_extensions():
 
 
 install_requires = []
-setup_requires = []
-tests_require = ['pytest', 'pytest-runner', 'pytest-cov']
+
+test_requires = [
+    'pytest',
+    'pytest-cov',
+]
+
+# work-around hipify abs paths
+include_package_data = True
+if torch.cuda.is_available() and torch.version.hip:
+    include_package_data = False
 
 setup(
     name='torch_scatter',
-    version='2.0.9',
+    version=__version__,
+    description='PyTorch Extension Library of Optimized Scatter Operations',
     author='Matthias Fey',
     author_email='matthias.fey@tu-dortmund.de',
-    url='https://github.com/rusty1s/pytorch_scatter',
-    description='PyTorch Extension Library of Optimized Scatter Operations',
+    url=URL,
+    download_url=f'{URL}/archive/{__version__}.tar.gz',
     keywords=['pytorch', 'scatter', 'segment', 'gather'],
-    license='MIT',
-    python_requires='>=3.6',
+    python_requires='>=3.8',
     install_requires=install_requires,
-    setup_requires=setup_requires,
-    tests_require=tests_require,
-    extras_require={'test': tests_require},
+    extras_require={
+        'test': test_requires,
+    },
     ext_modules=get_extensions() if not BUILD_DOCS else [],
     cmdclass={
         'build_ext':
         BuildExtension.with_options(no_python_abi_suffix=True, use_ninja=False)
     },
     packages=find_packages(),
+    include_package_data=include_package_data,
 )

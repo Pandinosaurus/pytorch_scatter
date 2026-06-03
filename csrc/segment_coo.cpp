@@ -1,7 +1,11 @@
+#ifdef WITH_PYTHON
 #include <Python.h>
+#endif
+
 #include <torch/script.h>
 
 #include "cpu/segment_coo_cpu.h"
+#include "macros.h"
 #include "utils.h"
 
 #ifdef WITH_CUDA
@@ -9,17 +13,19 @@
 #endif
 
 #ifdef _WIN32
+#ifdef WITH_PYTHON
 #ifdef WITH_CUDA
 PyMODINIT_FUNC PyInit__segment_coo_cuda(void) { return NULL; }
 #else
 PyMODINIT_FUNC PyInit__segment_coo_cpu(void) { return NULL; }
 #endif
 #endif
+#endif
 
-std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
+std::tuple<torch::Tensor, std::optional<torch::Tensor>>
 segment_coo_fw(torch::Tensor src, torch::Tensor index,
-               torch::optional<torch::Tensor> optional_out,
-               torch::optional<int64_t> dim_size, std::string reduce) {
+               std::optional<torch::Tensor> optional_out,
+               std::optional<int64_t> dim_size, std::string reduce) {
   if (src.device().is_cuda()) {
 #ifdef WITH_CUDA
     return segment_coo_cuda(src, index, optional_out, dim_size, reduce);
@@ -32,7 +38,7 @@ segment_coo_fw(torch::Tensor src, torch::Tensor index,
 }
 
 torch::Tensor gather_coo_fw(torch::Tensor src, torch::Tensor index,
-                            torch::optional<torch::Tensor> optional_out) {
+                            std::optional<torch::Tensor> optional_out) {
   if (src.device().is_cuda()) {
 #ifdef WITH_CUDA
     return gather_coo_cuda(src, index, optional_out);
@@ -52,8 +58,8 @@ class SegmentSumCOO : public torch::autograd::Function<SegmentSumCOO> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable index,
-                               torch::optional<Variable> optional_out,
-                               torch::optional<int64_t> dim_size) {
+                               std::optional<Variable> optional_out,
+                               std::optional<int64_t> dim_size) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto result = segment_coo_fw(src, index, optional_out, dim_size, "sum");
     auto out = std::get<0>(result);
@@ -78,8 +84,8 @@ class SegmentMeanCOO : public torch::autograd::Function<SegmentMeanCOO> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable index,
-                               torch::optional<Variable> optional_out,
-                               torch::optional<int64_t> dim_size) {
+                               std::optional<Variable> optional_out,
+                               std::optional<int64_t> dim_size) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto result = segment_coo_fw(src, index, optional_out, dim_size, "mean");
     auto out = std::get<0>(result);
@@ -98,7 +104,7 @@ public:
     auto src_shape = list2vec(ctx->saved_data["src_shape"].toIntList());
     auto grad_in = torch::empty(src_shape, grad_out.options());
     gather_coo_fw(grad_out, index, grad_in);
-    count = gather_coo_fw(count, index, torch::nullopt);
+    count = gather_coo_fw(count, index, std::nullopt);
     for (auto i = 0; i < grad_out.dim() - index.dim(); i++)
       count = count.unsqueeze(-1);
     grad_in.true_divide_(count);
@@ -110,8 +116,8 @@ class SegmentMinCOO : public torch::autograd::Function<SegmentMinCOO> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable index,
-                               torch::optional<Variable> optional_out,
-                               torch::optional<int64_t> dim_size) {
+                               std::optional<Variable> optional_out,
+                               std::optional<int64_t> dim_size) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto result = segment_coo_fw(src, index, optional_out, dim_size, "min");
     auto out = std::get<0>(result);
@@ -142,8 +148,8 @@ class SegmentMaxCOO : public torch::autograd::Function<SegmentMaxCOO> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable index,
-                               torch::optional<Variable> optional_out,
-                               torch::optional<int64_t> dim_size) {
+                               std::optional<Variable> optional_out,
+                               std::optional<int64_t> dim_size) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto result = segment_coo_fw(src, index, optional_out, dim_size, "max");
     auto out = std::get<0>(result);
@@ -174,7 +180,7 @@ class GatherCOO : public torch::autograd::Function<GatherCOO> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable index,
-                               torch::optional<Variable> optional_out) {
+                               std::optional<Variable> optional_out) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto out = gather_coo_fw(src, index, optional_out);
     ctx->save_for_backward({index});
@@ -190,41 +196,44 @@ public:
     auto src_shape = list2vec(ctx->saved_data["src_shape"].toIntList());
 
     auto grad_in = torch::zeros(src_shape, grad_out.options());
-    segment_coo_fw(grad_out, index, grad_in, torch::nullopt, "sum");
+    segment_coo_fw(grad_out, index, grad_in, std::nullopt, "sum");
     return {grad_in, Variable(), Variable()};
   }
 };
 
-torch::Tensor segment_sum_coo(torch::Tensor src, torch::Tensor index,
-                              torch::optional<torch::Tensor> optional_out,
-                              torch::optional<int64_t> dim_size) {
+SCATTER_API torch::Tensor
+segment_sum_coo(torch::Tensor src, torch::Tensor index,
+                std::optional<torch::Tensor> optional_out,
+                std::optional<int64_t> dim_size) {
   return SegmentSumCOO::apply(src, index, optional_out, dim_size)[0];
 }
 
-torch::Tensor segment_mean_coo(torch::Tensor src, torch::Tensor index,
-                               torch::optional<torch::Tensor> optional_out,
-                               torch::optional<int64_t> dim_size) {
+SCATTER_API torch::Tensor
+segment_mean_coo(torch::Tensor src, torch::Tensor index,
+                 std::optional<torch::Tensor> optional_out,
+                 std::optional<int64_t> dim_size) {
   return SegmentMeanCOO::apply(src, index, optional_out, dim_size)[0];
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
+SCATTER_API std::tuple<torch::Tensor, torch::Tensor>
 segment_min_coo(torch::Tensor src, torch::Tensor index,
-                torch::optional<torch::Tensor> optional_out,
-                torch::optional<int64_t> dim_size) {
+                std::optional<torch::Tensor> optional_out,
+                std::optional<int64_t> dim_size) {
   auto result = SegmentMinCOO::apply(src, index, optional_out, dim_size);
   return std::make_tuple(result[0], result[1]);
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
+SCATTER_API std::tuple<torch::Tensor, torch::Tensor>
 segment_max_coo(torch::Tensor src, torch::Tensor index,
-                torch::optional<torch::Tensor> optional_out,
-                torch::optional<int64_t> dim_size) {
+                std::optional<torch::Tensor> optional_out,
+                std::optional<int64_t> dim_size) {
   auto result = SegmentMaxCOO::apply(src, index, optional_out, dim_size);
   return std::make_tuple(result[0], result[1]);
 }
 
-torch::Tensor gather_coo(torch::Tensor src, torch::Tensor index,
-                         torch::optional<torch::Tensor> optional_out) {
+SCATTER_API torch::Tensor
+gather_coo(torch::Tensor src, torch::Tensor index,
+           std::optional<torch::Tensor> optional_out) {
   return GatherCOO::apply(src, index, optional_out)[0];
 }
 

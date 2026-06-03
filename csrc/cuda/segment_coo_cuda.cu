@@ -36,8 +36,8 @@ segment_coo_kernel(const scalar_t *src_data,
 #pragma unroll
     for (int i = 1; i < 32; i *= 2) {
       // Parallel reduction inside a single warp.
-      tmp = __shfl_up_sync(FULL_MASK, val, i);
-      next_idx = __shfl_up_sync(FULL_MASK, idx, i);
+      tmp = SHFL_UP_SYNC(FULL_MASK, val, i);
+      next_idx = SHFL_UP_SYNC(FULL_MASK, idx, i);
       if (lane_idx >= i && row_idx / D == (row_idx - i) / D) {
         assert(idx >= next_idx);
         if (idx == next_idx)
@@ -45,7 +45,7 @@ segment_coo_kernel(const scalar_t *src_data,
       }
     }
 
-    next_idx = __shfl_down_sync(FULL_MASK, idx, 1);
+    next_idx = SHFL_DOWN_SYNC(FULL_MASK, idx, 1);
     if (lane_idx == 32 - 1 || row_idx / D != (row_idx + 1) / D ||
         idx != next_idx)
       Reducer<scalar_t, REDUCE>::atomic_write(out_data + out_idx, val);
@@ -149,15 +149,15 @@ __global__ void segment_coo_arg_broadcast_kernel(
   }
 }
 
-std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
+std::tuple<torch::Tensor, std::optional<torch::Tensor>>
 segment_coo_cuda(torch::Tensor src, torch::Tensor index,
-                 torch::optional<torch::Tensor> optional_out,
-                 torch::optional<int64_t> dim_size, std::string reduce) {
+                 std::optional<torch::Tensor> optional_out,
+                 std::optional<int64_t> dim_size, std::string reduce) {
   CHECK_CUDA(src);
   CHECK_CUDA(index);
   if (optional_out.has_value())
     CHECK_CUDA(optional_out.value());
-  cudaSetDevice(src.get_device());
+  c10::cuda::MaybeSetDevice(src.get_device());
 
   CHECK_INPUT(src.dim() >= index.dim());
 
@@ -191,7 +191,7 @@ segment_coo_cuda(torch::Tensor src, torch::Tensor index,
     out = torch::zeros(sizes, src.options());
   }
 
-  torch::optional<torch::Tensor> arg_out = torch::nullopt;
+  std::optional<torch::Tensor> arg_out = std::nullopt;
   int64_t *arg_out_data = nullptr;
   if (reduce2REDUCE.at(reduce) == MIN || reduce2REDUCE.at(reduce) == MAX) {
     arg_out = torch::full_like(out, src.size(dim), index.options());
@@ -214,7 +214,7 @@ segment_coo_cuda(torch::Tensor src, torch::Tensor index,
 
   auto index_info = at::cuda::detail::getTensorInfo<int64_t, int>(index);
   auto stream = at::cuda::getCurrentCUDAStream();
-  AT_DISPATCH_ALL_TYPES_AND(at::ScalarType::Half, src.scalar_type(), "_", [&] {
+  AT_DISPATCH_ALL_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, src.scalar_type(), "_", [&] {
     auto src_data = src.data_ptr<scalar_t>();
     auto out_data = out.data_ptr<scalar_t>();
 
@@ -325,12 +325,12 @@ __global__ void gather_coo_broadcast_kernel(
 }
 
 torch::Tensor gather_coo_cuda(torch::Tensor src, torch::Tensor index,
-                              torch::optional<torch::Tensor> optional_out) {
+                              std::optional<torch::Tensor> optional_out) {
   CHECK_CUDA(src);
   CHECK_CUDA(index);
   if (optional_out.has_value())
     CHECK_CUDA(optional_out.value());
-  cudaSetDevice(src.get_device());
+  c10::cuda::MaybeSetDevice(src.get_device());
 
   CHECK_INPUT(src.dim() >= index.dim());
 
@@ -365,7 +365,7 @@ torch::Tensor gather_coo_cuda(torch::Tensor src, torch::Tensor index,
 
   auto index_info = at::cuda::detail::getTensorInfo<int64_t, int>(index);
   auto stream = at::cuda::getCurrentCUDAStream();
-  AT_DISPATCH_ALL_TYPES_AND(at::ScalarType::Half, src.scalar_type(), "_", [&] {
+  AT_DISPATCH_ALL_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, src.scalar_type(), "_", [&] {
     auto src_data = src.data_ptr<scalar_t>();
     auto out_data = out.data_ptr<scalar_t>();
 

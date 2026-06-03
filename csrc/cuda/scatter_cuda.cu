@@ -7,7 +7,7 @@
 #include "reducer.cuh"
 #include "utils.cuh"
 
-#define THREADS 1024
+#define THREADS 256
 #define BLOCKS(N) (N + THREADS - 1) / THREADS
 
 template <typename scalar_t, ReductionType REDUCE>
@@ -55,15 +55,15 @@ scatter_arg_kernel(const scalar_t *src_data,
   }
 }
 
-std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
+std::tuple<torch::Tensor, std::optional<torch::Tensor>>
 scatter_cuda(torch::Tensor src, torch::Tensor index, int64_t dim,
-             torch::optional<torch::Tensor> optional_out,
-             torch::optional<int64_t> dim_size, std::string reduce) {
+             std::optional<torch::Tensor> optional_out,
+             std::optional<int64_t> dim_size, std::string reduce) {
   CHECK_CUDA(src);
   CHECK_CUDA(index);
   if (optional_out.has_value())
     CHECK_CUDA(optional_out.value());
-  cudaSetDevice(src.get_device());
+  c10::cuda::MaybeSetDevice(src.get_device());
 
   CHECK_INPUT(src.dim() == index.dim());
   for (auto i = 0; i < index.dim() - 1; i++)
@@ -89,7 +89,7 @@ scatter_cuda(torch::Tensor src, torch::Tensor index, int64_t dim,
     out = torch::empty(sizes, src.options());
   }
 
-  torch::optional<torch::Tensor> arg_out = torch::nullopt;
+  std::optional<torch::Tensor> arg_out = std::nullopt;
   int64_t *arg_out_data = nullptr;
   if (reduce2REDUCE.at(reduce) == MIN || reduce2REDUCE.at(reduce) == MAX) {
     arg_out = torch::full_like(out, src.size(dim), index.options());
@@ -111,7 +111,7 @@ scatter_cuda(torch::Tensor src, torch::Tensor index, int64_t dim,
 
   auto index_info = at::cuda::detail::getTensorInfo<int64_t, int>(index);
   auto stream = at::cuda::getCurrentCUDAStream();
-  AT_DISPATCH_ALL_TYPES_AND(at::ScalarType::Half, src.scalar_type(), "_", [&] {
+  AT_DISPATCH_ALL_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, src.scalar_type(), "_", [&] {
     auto src_data = src.data_ptr<scalar_t>();
     auto out_data = out.data_ptr<scalar_t>();
 

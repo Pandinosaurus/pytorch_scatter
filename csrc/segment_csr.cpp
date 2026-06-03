@@ -1,7 +1,11 @@
+#ifdef WITH_PYTHON
 #include <Python.h>
+#endif
+
 #include <torch/script.h>
 
 #include "cpu/segment_csr_cpu.h"
+#include "macros.h"
 #include "utils.h"
 
 #ifdef WITH_CUDA
@@ -9,16 +13,18 @@
 #endif
 
 #ifdef _WIN32
+#ifdef WITH_PYTHON
 #ifdef WITH_CUDA
 PyMODINIT_FUNC PyInit__segment_csr_cuda(void) { return NULL; }
 #else
 PyMODINIT_FUNC PyInit__segment_csr_cpu(void) { return NULL; }
 #endif
 #endif
+#endif
 
-std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
+std::tuple<torch::Tensor, std::optional<torch::Tensor>>
 segment_csr_fw(torch::Tensor src, torch::Tensor indptr,
-               torch::optional<torch::Tensor> optional_out,
+               std::optional<torch::Tensor> optional_out,
                std::string reduce) {
   if (src.device().is_cuda()) {
 #ifdef WITH_CUDA
@@ -32,7 +38,7 @@ segment_csr_fw(torch::Tensor src, torch::Tensor indptr,
 }
 
 torch::Tensor gather_csr_fw(torch::Tensor src, torch::Tensor indptr,
-                            torch::optional<torch::Tensor> optional_out) {
+                            std::optional<torch::Tensor> optional_out) {
   if (src.device().is_cuda()) {
 #ifdef WITH_CUDA
     return gather_csr_cuda(src, indptr, optional_out);
@@ -52,7 +58,7 @@ class SegmentSumCSR : public torch::autograd::Function<SegmentSumCSR> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable indptr,
-                               torch::optional<Variable> optional_out) {
+                               std::optional<Variable> optional_out) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto out = std::get<0>(segment_csr_fw(src, indptr, optional_out, "sum"));
     ctx->save_for_backward({indptr});
@@ -76,7 +82,7 @@ class SegmentMeanCSR : public torch::autograd::Function<SegmentMeanCSR> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable indptr,
-                               torch::optional<Variable> optional_out) {
+                               std::optional<Variable> optional_out) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto out = std::get<0>(segment_csr_fw(src, indptr, optional_out, "mean"));
     ctx->save_for_backward({indptr});
@@ -96,7 +102,7 @@ public:
       auto indptr1 = indptr.narrow(-1, 0, indptr.size(-1) - 1);
       auto indptr2 = indptr.narrow(-1, 1, indptr.size(-1) - 1);
       auto count = (indptr2 - indptr1).to(grad_in.options());
-      count = gather_csr_fw(count, indptr, torch::nullopt);
+      count = gather_csr_fw(count, indptr, std::nullopt);
       for (auto i = 0; i < grad_out.dim() - indptr.dim(); i++)
         count = count.unsqueeze(-1);
       grad_in.true_divide_(count);
@@ -109,7 +115,7 @@ class SegmentMinCSR : public torch::autograd::Function<SegmentMinCSR> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable indptr,
-                               torch::optional<Variable> optional_out) {
+                               std::optional<Variable> optional_out) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto result = segment_csr_fw(src, indptr, optional_out, "min");
     auto out = std::get<0>(result);
@@ -140,7 +146,7 @@ class SegmentMaxCSR : public torch::autograd::Function<SegmentMaxCSR> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable indptr,
-                               torch::optional<Variable> optional_out) {
+                               std::optional<Variable> optional_out) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto result = segment_csr_fw(src, indptr, optional_out, "max");
     auto out = std::get<0>(result);
@@ -171,7 +177,7 @@ class GatherCSR : public torch::autograd::Function<GatherCSR> {
 public:
   static variable_list forward(AutogradContext *ctx, Variable src,
                                Variable indptr,
-                               torch::optional<Variable> optional_out) {
+                               std::optional<Variable> optional_out) {
     ctx->saved_data["src_shape"] = src.sizes();
     auto out = gather_csr_fw(src, indptr, optional_out);
     ctx->save_for_backward({indptr});
@@ -192,32 +198,35 @@ public:
   }
 };
 
-torch::Tensor segment_sum_csr(torch::Tensor src, torch::Tensor indptr,
-                              torch::optional<torch::Tensor> optional_out) {
+SCATTER_API torch::Tensor
+segment_sum_csr(torch::Tensor src, torch::Tensor indptr,
+                std::optional<torch::Tensor> optional_out) {
   return SegmentSumCSR::apply(src, indptr, optional_out)[0];
 }
 
-torch::Tensor segment_mean_csr(torch::Tensor src, torch::Tensor indptr,
-                               torch::optional<torch::Tensor> optional_out) {
+SCATTER_API torch::Tensor
+segment_mean_csr(torch::Tensor src, torch::Tensor indptr,
+                 std::optional<torch::Tensor> optional_out) {
   return SegmentMeanCSR::apply(src, indptr, optional_out)[0];
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
+SCATTER_API std::tuple<torch::Tensor, torch::Tensor>
 segment_min_csr(torch::Tensor src, torch::Tensor indptr,
-                torch::optional<torch::Tensor> optional_out) {
+                std::optional<torch::Tensor> optional_out) {
   auto result = SegmentMinCSR::apply(src, indptr, optional_out);
   return std::make_tuple(result[0], result[1]);
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
+SCATTER_API std::tuple<torch::Tensor, torch::Tensor>
 segment_max_csr(torch::Tensor src, torch::Tensor indptr,
-                torch::optional<torch::Tensor> optional_out) {
+                std::optional<torch::Tensor> optional_out) {
   auto result = SegmentMaxCSR::apply(src, indptr, optional_out);
   return std::make_tuple(result[0], result[1]);
 }
 
-torch::Tensor gather_csr(torch::Tensor src, torch::Tensor indptr,
-                         torch::optional<torch::Tensor> optional_out) {
+SCATTER_API torch::Tensor
+gather_csr(torch::Tensor src, torch::Tensor indptr,
+           std::optional<torch::Tensor> optional_out) {
   return GatherCSR::apply(src, indptr, optional_out)[0];
 }
 

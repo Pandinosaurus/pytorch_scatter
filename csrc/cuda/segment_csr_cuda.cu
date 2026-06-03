@@ -46,9 +46,9 @@ segment_csr_kernel(const scalar_t *src_data,
     for (int i = TB / 2; i > 0; i /= 2) {
       // Parallel reduction inside a single warp.
       if (REDUCE == MIN || REDUCE == MAX)
-        arg_tmp = __shfl_down_sync(FULL_MASK, arg, i);
+        arg_tmp = SHFL_DOWN_SYNC(FULL_MASK, arg, i);
       Reducer<scalar_t, REDUCE>::update(
-          &val, __shfl_down_sync(FULL_MASK, val, i), &arg, arg_tmp);
+          &val, SHFL_DOWN_SYNC(FULL_MASK, val, i), &arg, arg_tmp);
     }
 
     if (lane_idx == 0) {
@@ -94,15 +94,15 @@ __global__ void segment_csr_broadcast_kernel(
   }
 }
 
-std::tuple<torch::Tensor, torch::optional<torch::Tensor>>
+std::tuple<torch::Tensor, std::optional<torch::Tensor>>
 segment_csr_cuda(torch::Tensor src, torch::Tensor indptr,
-                 torch::optional<torch::Tensor> optional_out,
+                 std::optional<torch::Tensor> optional_out,
                  std::string reduce) {
   CHECK_CUDA(src);
   CHECK_CUDA(indptr);
   if (optional_out.has_value())
     CHECK_CUDA(optional_out.value());
-  cudaSetDevice(src.get_device());
+  c10::cuda::MaybeSetDevice(src.get_device());
 
   CHECK_INPUT(src.dim() >= indptr.dim());
 
@@ -128,7 +128,7 @@ segment_csr_cuda(torch::Tensor src, torch::Tensor indptr,
     out = torch::empty(sizes, src.options());
   }
 
-  torch::optional<torch::Tensor> arg_out = torch::nullopt;
+  std::optional<torch::Tensor> arg_out = std::nullopt;
   int64_t *arg_out_data = nullptr;
   if (reduce2REDUCE.at(reduce) == MIN || reduce2REDUCE.at(reduce) == MAX) {
     arg_out = torch::full(out.sizes(), src.size(dim), indptr.options());
@@ -147,7 +147,7 @@ segment_csr_cuda(torch::Tensor src, torch::Tensor indptr,
 
   auto indptr_info = at::cuda::detail::getTensorInfo<int64_t, int>(indptr);
   auto stream = at::cuda::getCurrentCUDAStream();
-  AT_DISPATCH_ALL_TYPES_AND(at::ScalarType::Half, src.scalar_type(), "_", [&] {
+  AT_DISPATCH_ALL_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, src.scalar_type(), "_", [&] {
     auto src_data = src.data_ptr<scalar_t>();
     auto out_data = out.data_ptr<scalar_t>();
 
@@ -217,12 +217,12 @@ __global__ void gather_csr_broadcast_kernel(
 }
 
 torch::Tensor gather_csr_cuda(torch::Tensor src, torch::Tensor indptr,
-                              torch::optional<torch::Tensor> optional_out) {
+                              std::optional<torch::Tensor> optional_out) {
   CHECK_CUDA(src);
   CHECK_CUDA(indptr);
   if (optional_out.has_value())
     CHECK_CUDA(optional_out.value());
-  cudaSetDevice(src.get_device());
+  c10::cuda::MaybeSetDevice(src.get_device());
 
   CHECK_INPUT(src.dim() >= indptr.dim());
 
@@ -264,7 +264,7 @@ torch::Tensor gather_csr_cuda(torch::Tensor src, torch::Tensor indptr,
 
   auto indptr_info = at::cuda::detail::getTensorInfo<int64_t, int>(indptr);
   auto stream = at::cuda::getCurrentCUDAStream();
-  AT_DISPATCH_ALL_TYPES_AND(at::ScalarType::Half, src.scalar_type(), "_", [&] {
+  AT_DISPATCH_ALL_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, src.scalar_type(), "_", [&] {
     auto src_data = src.data_ptr<scalar_t>();
     auto out_data = out.data_ptr<scalar_t>();
 
